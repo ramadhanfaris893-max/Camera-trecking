@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kamera Cerdas Deteksi Jari & Suara+</title>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+<style>
+*{box-sizing:border-box}
+body{
+    font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;text-align:center;
+    background:linear-gradient(135deg,#17172a,#25254a);color:white;margin:0;
+    min-height:100vh;display:flex;justify-content:center;align-items:center;
+    padding:20px;transition:.3s
+}
+body.light{background:linear-gradient(135deg,#dff6ff,#eef1ff);color:#172033}
+#permission-screen{
+    background:rgba(42,42,64,.96);padding:40px;border-radius:20px;
+    box-shadow:0 15px 45px rgba(0,0,0,.45);max-width:450px;width:100%
+}
+body.light #permission-screen{background:white}
+#permission-screen h2{margin-top:0;color:#61dafb}
+.btn-group{margin-top:20px;display:flex;justify-content:center;gap:12px}
+.btn{
+    padding:11px 25px;font-size:1.1em;border:none;border-radius:10px;
+    cursor:pointer;font-weight:bold;transition:.25s
+}
+.btn:hover{transform:translateY(-2px);filter:brightness(1.1)}
+.btn-yes{background:#4CAF50;color:white}.btn-no{background:#f44336;color:white}
+#app-screen{display:none;flex-direction:column;align-items:center;width:100%;max-width:1000px}
+h1{color:#61dafb;margin:4px 0}
+.subtitle{margin:4px 0 12px;opacity:.85}
+#output_text{
+    font-size:clamp(1.6em,5vw,2.5em);font-weight:bold;color:#ffeb3b;
+    margin:8px 0;min-height:55px;text-shadow:0 0 12px rgba(255,235,59,.25)
+}
+.camera-wrap{position:relative;width:min(900px,96vw)}
+#video{display:none}
+#canvas{
+    display:block;width:100%;height:auto;border:4px solid #61dafb;border-radius:15px;
+    background:#000;box-shadow:0 0 30px rgba(97,218,251,.18)
+}
+.badge{
+    position:absolute;top:12px;padding:7px 11px;border-radius:20px;
+    background:rgba(0,0,0,.58);font-size:.82rem;backdrop-filter:blur(6px)
+}
+#fpsBadge{left:12px}.handBadge{right:12px}
+.panel{
+    width:min(900px,96vw);margin-top:12px;padding:12px;border-radius:15px;
+    background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1)
+}
+.controls{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}
+.control{
+    border:0;border-radius:10px;padding:9px 12px;background:#30304d;color:white;
+    cursor:pointer;font-weight:600
+}
+body.light .control{background:#dce4f2;color:#172033}
+.control.active{background:#00a8cc;color:white}
+.stats{display:flex;justify-content:center;gap:18px;flex-wrap:wrap;font-size:.9rem;opacity:.9;margin-top:8px}
+.slider-row{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:10px}
+input[type=range]{width:180px}
+.history{
+    max-height:120px;overflow:auto;text-align:left;font-size:.85rem;
+    margin-top:10px;padding:8px;border-radius:10px;background:rgba(0,0,0,.15)
+}
+.history div{padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.08)}
+.message{color:#ffeb3b;font-size:1.05em;margin-top:20px}
+.small{font-size:.8rem;opacity:.7}
+</style>
+</head>
+<body>
+
+<div id="permission-screen">
+    <h2>📷 Izinkan Akses Kamera?</h2>
+    <p>Aplikasi ini menggunakan kamera untuk mendeteksi gerakan tangan secara real-time.</p>
+    <div class="btn-group">
+        <button class="btn btn-yes" onclick="startApp()">Iya</button>
+        <button class="btn btn-no" onclick="cancelApp()">Tidak</button>
+    </div>
+    <p id="denied-msg" class="message" style="display:none">Anda menolak akses kamera. Aplikasi tidak dapat dijalankan.</p>
+</div>
+
+<div id="app-screen">
+    <h1>🤖 Deteksi Jari Auto Tracking+</h1>
+    <p class="subtitle">Tunjukkan tanganmu ke kamera dan dengarkan responsnya.</p>
+    <div id="output_text">Memuat sistem AI...</div>
+
+    <div class="camera-wrap">
+        <video id="video" width="640" height="480" autoplay playsinline></video>
+        <canvas id="canvas" width="640" height="480"></canvas>
+        <div class="badge" id="fpsBadge">FPS: --</div>
+        <div class="badge handBadge" id="handBadge">Tangan: --</div>
+    </div>
+
+    <div class="panel">
+        <div class="controls">
+            <button class="control active" id="voiceBtn" onclick="toggleVoice()">🔊 Suara ON</button>
+            <button class="control" onclick="flipCamera()">🔄 Balik Kamera</button>
+            <button class="control" onclick="takeSnapshot()">📸 Foto</button>
+            <button class="control" onclick="toggleFullscreen()">⛶ Fullscreen</button>
+            <button class="control" onclick="toggleTheme()">🌙 Tema</button>
+            <button class="control" onclick="clearHistory()">🗑️ Hapus Riwayat</button>
+        </div>
+
+        <div class="slider-row">
+            <span>Kecepatan suara</span>
+            <input id="rateSlider" type="range" min=".5" max="1.8" step=".1" value="1">
+            <b id="rateValue">1.0×</b>
+        </div>
+
+        <div class="stats">
+            <span>🖐️ Jari: <b id="fingerStat">-</b></span>
+            <span>🎯 Keyakinan: <b id="confidenceStat">-</b></span>
+            <span>👋 Tangan: <b id="sideStat">-</b></span>
+        </div>
+
+        <div class="history" id="history">
+            <b>Riwayat gesture</b><br>
+            Belum ada gesture.
+        </div>
+        <div class="small">Tips: gunakan pencahayaan cukup agar tracking lebih stabil.</div>
+    </div>
+</div>
+
+<script>
+const permissionScreen=document.getElementById('permission-screen');
+const appScreen=document.getElementById('app-screen');
+const deniedMsg=document.getElementById('denied-msg');
+const videoElement=document.getElementById('video');
+const canvasElement=document.getElementById('canvas');
+const canvasCtx=canvasElement.getContext('2d');
+const outputText=document.getElementById('output_text');
+const voiceBtn=document.getElementById('voiceBtn');
+const historyBox=document.getElementById('history');
+const rateSlider=document.getElementById('rateSlider');
+const rateValue=document.getElementById('rateValue');
+
+let camera;
+let lastSpokenFingerCount=-1;
+let voiceEnabled=true;
+let facingMode='user';
+let historyData=[];
+let lastTime=performance.now(), frameCounter=0;
+let stableCandidate=-1, stableFrames=0;
+let previousLandmarks=null;
+let trail=[];
+let mirrorCanvas=true;
+
+rateSlider.addEventListener('input',()=>rateValue.textContent=Number(rateSlider.value).toFixed(1)+'×');
+
+function speak(text){
+    if(!voiceEnabled || !('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const speech=new SpeechSynthesisUtterance(text);
+    speech.lang='id-ID';
+    speech.rate=Number(rateSlider.value);
+    speech.pitch=1;
+    window.speechSynthesis.speak(speech);
+}
+
+function cancelApp(){deniedMsg.style.display="block"}
+
+function startApp(){
+    permissionScreen.style.display="none";
+    appScreen.style.display="flex";
+    const warmup=new SpeechSynthesisUtterance("");
+    window.speechSynthesis.speak(warmup);
+    initMediaPipe();
+}
+
+function initMediaPipe(){
+    const hands=new Hands({locateFile:file=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+    hands.setOptions({
+        maxNumHands:1,modelComplexity:1,minDetectionConfidence:.7,minTrackingConfidence:.7
+    });
+    hands.onResults(onResults);
+
+    camera=new Camera(videoElement,{
+        onFrame:async()=>{await hands.send({image:videoElement})},
+        width:640,height:480,facingMode:facingMode
+    });
+
+    camera.start().then(()=>{
+        outputText.innerText="Kamera Aktif! Tunjukkan jarimu.";
+        speak("Kamera aktif. Silakan tunjukkan jari anda.");
+    }).catch(err=>{
+        outputText.innerText="Gagal mengakses kamera!";
+        console.error(err);
+    });
+}
+
+function countFingers(landmarks,handedness){
+    let count=0;
+    const tips=[8,12,16,20],pips=[6,10,14,18];
+    for(let j=0;j<tips.length;j++){
+        if(landmarks[tips[j]].y<landmarks[pips[j]].y) count++;
+    }
+    if(handedness==='Right'){
+        if(landmarks[4].x<landmarks[3].x) count++;
+    }else{
+        if(landmarks[4].x>landmarks[3].x) count++;
+    }
+    return count;
+}
+
+function getGesture(count){
+    const map={
+        0:["Kepalan tangan ✊","Nol jari"],
+        1:["Hai 👋","Hai"],
+        2:["Apa kabar? ✌️","Apa kabar?"],
+        3:["Luar biasa! 🤟","Luar biasa!"],
+        4:["Tetap Semangat! 🖖","Tetap semangat!"],
+        5:["Sampai Jumpa! 🖐️","Sampai jumpa!"]
+    };
+    return map[count]||["Gesture tidak dikenali","Gesture tidak dikenali"];
+}
+
+function onResults(results){
+    canvasCtx.save();
+    canvasCtx.clearRect(0,0,canvasElement.width,canvasElement.height);
+
+    if(mirrorCanvas){
+        canvasCtx.translate(canvasElement.width,0);
+        canvasCtx.scale(-1,1);
+    }
+    canvasCtx.drawImage(results.image,0,0,canvasElement.width,canvasElement.height);
+    if(mirrorCanvas) canvasCtx.setTransform(1,0,0,1,0,0);
+
+    frameCounter++;
+    const now=performance.now();
+    if(now-lastTime>=1000){
+        document.getElementById('fpsBadge').textContent='FPS: '+frameCounter;
+        frameCounter=0;lastTime=now;
+    }
+
+    if(results.multiHandLandmarks&&results.multiHandLandmarks.length>0){
+        const landmarks=results.multiHandLandmarks[0];
+        const handedness=results.multiHandedness[0].label;
+        const confidence=results.multiHandedness[0].score;
+        const count=countFingers(landmarks,handedness);
+        const [displayText,speechText]=getGesture(count);
+
+        drawConnectors(canvasCtx,landmarks,HAND_CONNECTIONS,{color:'#00FF00',lineWidth:5});
+        drawLandmarks(canvasCtx,landmarks,{color:'#FF0000',lineWidth:2});
+
+        document.getElementById('handBadge').textContent='Tangan: '+handedness;
+        document.getElementById('fingerStat').textContent=count;
+        document.getElementById('confidenceStat').textContent=(confidence*100).toFixed(1)+'%';
+        document.getElementById('sideStat').textContent=handedness;
+
+        // Stabilizer: gesture harus muncul beberapa frame agar suara tidak salah trigger.
+        if(count===stableCandidate) stableFrames++;
+        else {stableCandidate=count;stableFrames=1}
+
+        if(stableFrames>=5){
+            outputText.innerText=displayText;
+            if(count!==lastSpokenFingerCount){
+                speak(speechText);
+                addHistory(displayText,count);
+                lastSpokenFingerCount=count;
+            }
+        }
+    }else{
+        document.getElementById('handBadge').textContent='Tangan: --';
+        document.getElementById('fingerStat').textContent='-';
+        document.getElementById('confidenceStat').textContent='-';
+        document.getElementById('sideStat').textContent='-';
+        outputText.innerText="Tangan tidak terdeteksi ❌";
+        lastSpokenFingerCount=-1;
+        stableCandidate=-1;
+        stableFrames=0;
+    }
+    canvasCtx.restore();
+}
+
+function addHistory(text,count){
+    const time=new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    historyData.unshift({time,text,count});
+    historyData=historyData.slice(0,15);
+    renderHistory();
+}
+function renderHistory(){
+    historyBox.innerHTML='<b>Riwayat gesture</b><br>'+
+        (historyData.length?historyData.map(x=>`<div>🕒 ${x.time} — ${x.text} <small>(${x.count} jari)</small></div>`).join('')
+        :'Belum ada gesture.');
+}
+function clearHistory(){historyData=[];renderHistory()}
+
+function toggleVoice(){
+    voiceEnabled=!voiceEnabled;
+    voiceBtn.textContent=voiceEnabled?'🔊 Suara ON':'🔇 Suara OFF';
+    voiceBtn.classList.toggle('active',voiceEnabled);
+    if(!voiceEnabled) window.speechSynthesis.cancel();
+}
+
+async function flipCamera(){
+    facingMode=facingMode==='user'?'environment':'user';
+    mirrorCanvas=facingMode==='user';
+    if(camera){
+        try{
+            camera.stop();
+            initMediaPipe();
+        }catch(e){console.error(e)}
+    }
+}
+
+function takeSnapshot(){
+    const link=document.createElement('a');
+    link.download='gesture-'+Date.now()+'.png';
+    link.href=canvasElement.toDataURL('image/png');
+    link.click();
+}
+
+async function toggleFullscreen(){
+    const target=document.querySelector('.camera-wrap');
+    if(!document.fullscreenElement) await target.requestFullscreen?.();
+    else await document.exitFullscreen?.();
+}
+
+function toggleTheme(){
+    document.body.classList.toggle('light');
+    localStorage.setItem('gestureTheme',document.body.classList.contains('light')?'light':'dark');
+}
+if(localStorage.getItem('gestureTheme')==='light') document.body.classList.add('light');
+</script>
+</body>
+</html>
